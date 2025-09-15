@@ -120,6 +120,7 @@ import org.bstats.charts.SingleLineChart;
 import org.bstats.velocity.Metrics;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
+import org.geysermc.cumulus.form.util.FormBuilder;
 import org.slf4j.Logger;
 
 @Plugin(
@@ -534,6 +535,20 @@ public class LimboAuth {
     String username = player.getUsername();
     String lowercaseUsername = username.toLowerCase(Locale.ROOT);
     this.cachedAuthChecks.put(lowercaseUsername, new CachedSessionUser(System.currentTimeMillis(), player.getRemoteAddress().getAddress(), username));
+  }
+
+  public boolean isFloodgatePlayer(Player player) {
+    return this.floodgateApi != null && this.floodgateApi.isFloodgatePlayer(player.getUniqueId());
+  }
+
+  public boolean canUseFloodgateForms(Player player) {
+    return this.floodgateApi != null
+        && Settings.IMP.MAIN.FLOODGATE_FORMS.ENABLED
+        && this.floodgateApi.isFloodgatePlayer(player.getUniqueId());
+  }
+
+  public boolean sendFloodgateForm(Player player, FormBuilder<?, ?, ?> builder) {
+    return this.floodgateApi != null && this.floodgateApi.sendForm(player.getUniqueId(), builder);
   }
 
   public void removePlayerFromCache(String username) {
