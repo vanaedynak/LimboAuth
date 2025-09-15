@@ -18,6 +18,7 @@
 package net.elytrium.limboauth.floodgate;
 
 import java.util.UUID;
+import org.geysermc.cumulus.form.util.FormBuilder;
 import org.geysermc.floodgate.api.FloodgateApi;
 
 /**
@@ -37,5 +38,9 @@ public class FloodgateApiHolder {
 
   public int getPrefixLength() {
     return this.floodgateApi.getPlayerPrefix().length();
+  }
+
+  public boolean sendForm(UUID uuid, FormBuilder<?, ?, ?> builder) {
+    return this.floodgateApi.sendForm(uuid, builder);
   }
 }
