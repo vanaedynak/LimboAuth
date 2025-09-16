@@ -671,7 +671,7 @@ public class LimboAuth {
       }
       case NORMAL:
       default: {
-        this.authServer.spawnPlayer(player, new AuthSessionHandler(this.playerDao, player, this, registeredPlayer));
+        this.authServer.spawnPlayer(player, new AuthSessionHandler(this.playerDao, player, this, registeredPlayer, this.floodgateApi));
         break;
       }
     }

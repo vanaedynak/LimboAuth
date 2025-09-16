@@ -46,6 +46,7 @@ import net.elytrium.limboauth.Settings;
 import net.elytrium.limboauth.event.PostAuthorizationEvent;
 import net.elytrium.limboauth.event.PostRegisterEvent;
 import net.elytrium.limboauth.event.TaskEvent;
+import net.elytrium.limboauth.floodgate.FloodgateApiHolder;
 import net.elytrium.limboauth.migration.MigrationHash;
 import net.elytrium.limboauth.model.RegisteredPlayer;
 import net.elytrium.limboauth.model.SQLRuntimeException;
@@ -53,6 +54,9 @@ import net.kyori.adventure.bossbar.BossBar;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.title.Title;
 import org.checkerframework.checker.nullness.qual.Nullable;
+import org.geysermc.cumulus.CustomForm;
+import org.geysermc.cumulus.response.CustomFormResponse;
+import org.geysermc.floodgate.api.player.FloodgatePlayer;
 
 public class AuthSessionHandler implements LimboSessionHandler {
 
@@ -91,10 +95,32 @@ public class AuthSessionHandler implements LimboSessionHandler {
   private static Title loginSuccessfulTitle;
   @Nullable
   private static MigrationHash migrationHash;
+  private static String registerFormTitle;
+  private static String registerFormDescription;
+  private static String registerFormPasswordPrompt;
+  private static String registerFormPasswordPlaceholder;
+  private static String registerFormPasswordConfirmPrompt;
+  private static String registerFormPasswordConfirmPlaceholder;
+  private static String registerFormErrorDifferentPasswords;
+  private static String registerFormErrorPasswordTooLong;
+  private static String registerFormErrorPasswordTooShort;
+  private static String registerFormErrorPasswordUnsafe;
+  private static String loginFormTitle;
+  private static String loginFormDescription;
+  private static String loginFormPasswordPrompt;
+  private static String loginFormPasswordPlaceholder;
+  private static String loginFormErrorWrongPassword;
+  private static String totpFormTitle;
+  private static String totpFormDescription;
+  private static String totpFormCodePrompt;
+  private static String totpFormCodePlaceholder;
+  private static String totpFormErrorWrongCode;
 
   private final Dao<RegisteredPlayer, String> playerDao;
   private final Player proxyPlayer;
   private final LimboAuth plugin;
+  @Nullable
+  private final FloodgateApiHolder floodgateApi;
 
   private final long joinTime = System.currentTimeMillis();
   private final BossBar bossBar = BossBar.bossBar(
@@ -116,11 +142,13 @@ public class AuthSessionHandler implements LimboSessionHandler {
   private String tempPassword;
   private boolean tokenReceived;
 
-  public AuthSessionHandler(Dao<RegisteredPlayer, String> playerDao, Player proxyPlayer, LimboAuth plugin, @Nullable RegisteredPlayer playerInfo) {
+  public AuthSessionHandler(Dao<RegisteredPlayer, String> playerDao, Player proxyPlayer, LimboAuth plugin,
+      @Nullable RegisteredPlayer playerInfo, @Nullable FloodgateApiHolder floodgateApi) {
     this.playerDao = playerDao;
     this.proxyPlayer = proxyPlayer;
     this.plugin = plugin;
     this.playerInfo = playerInfo;
+    this.floodgateApi = floodgateApi;
   }
 
   @Override
@@ -351,6 +379,30 @@ public class AuthSessionHandler implements LimboSessionHandler {
   }
 
   private void sendMessage(boolean sendTitle) {
+    if (this.isFloodgatePlayer()) {
+      boolean sent = false;
+      if (this.totpState) {
+        sent = this.openTotpForm(null);
+        if (sent && sendTitle && totpTitle != null) {
+          this.proxyPlayer.showTitle(totpTitle);
+        }
+      } else if (this.playerInfo == null) {
+        sent = this.openRegisterForm(null);
+        if (sent && sendTitle && registerTitle != null) {
+          this.proxyPlayer.showTitle(registerTitle);
+        }
+      } else {
+        sent = this.openLoginForm(null);
+        if (sent && sendTitle && loginTitle != null) {
+          this.proxyPlayer.showTitle(loginTitle);
+        }
+      }
+
+      if (sent) {
+        return;
+      }
+    }
+
     if (this.totpState) {
       this.proxyPlayer.sendMessage(totp);
       if (sendTitle && totpTitle != null) {
@@ -366,6 +418,264 @@ public class AuthSessionHandler implements LimboSessionHandler {
       if (sendTitle && loginTitle != null) {
         this.proxyPlayer.showTitle(loginTitle);
       }
+    }
+  }
+
+  private boolean isFloodgatePlayer() {
+    return this.floodgateApi != null && this.floodgateApi.isFloodgatePlayer(this.proxyPlayer.getUniqueId());
+  }
+
+  private boolean openRegisterForm(@Nullable String errorMessage) {
+    if (this.floodgateApi == null) {
+      return false;
+    }
+
+    FloodgatePlayer floodgatePlayer = this.floodgateApi.getPlayer(this.proxyPlayer.getUniqueId());
+    if (floodgatePlayer == null) {
+      return false;
+    }
+
+    boolean hasDescription = !registerFormDescription.isEmpty();
+    boolean hasError = errorMessage != null && !errorMessage.isEmpty();
+    CustomForm.Builder builder = CustomForm.builder()
+        .title(registerFormTitle);
+
+    if (hasDescription) {
+      builder.label(registerFormDescription);
+    }
+    if (hasError) {
+      builder.label(errorMessage);
+    }
+
+    builder.input(registerFormPasswordPrompt, registerFormPasswordPlaceholder, "");
+    if (Settings.IMP.MAIN.REGISTER_NEED_REPEAT_PASSWORD) {
+      builder.input(registerFormPasswordConfirmPrompt, registerFormPasswordConfirmPlaceholder, "");
+    }
+
+    final boolean descriptionPresent = hasDescription;
+    final boolean errorPresent = hasError;
+    builder.responseHandler((form, response) -> this.handleRegisterFormResponse(form, response, descriptionPresent, errorPresent));
+
+    return floodgatePlayer.sendForm(builder);
+  }
+
+  private boolean openLoginForm(@Nullable String errorMessage) {
+    if (this.floodgateApi == null) {
+      return false;
+    }
+
+    FloodgatePlayer floodgatePlayer = this.floodgateApi.getPlayer(this.proxyPlayer.getUniqueId());
+    if (floodgatePlayer == null) {
+      return false;
+    }
+
+    boolean hasDescription = !loginFormDescription.isEmpty();
+    boolean hasError = errorMessage != null && !errorMessage.isEmpty();
+    String title = MessageFormat.format(loginFormTitle, this.attempts);
+    CustomForm.Builder builder = CustomForm.builder()
+        .title(title);
+
+    if (hasDescription) {
+      builder.label(MessageFormat.format(loginFormDescription, this.attempts));
+    }
+    if (hasError) {
+      builder.label(errorMessage);
+    }
+
+    builder.input(loginFormPasswordPrompt, loginFormPasswordPlaceholder, "");
+
+    final boolean descriptionPresent = hasDescription;
+    final boolean errorPresent = hasError;
+    builder.responseHandler((form, response) -> this.handleLoginFormResponse(form, response, descriptionPresent, errorPresent));
+
+    return floodgatePlayer.sendForm(builder);
+  }
+
+  private boolean openTotpForm(@Nullable String errorMessage) {
+    if (this.floodgateApi == null) {
+      return false;
+    }
+
+    FloodgatePlayer floodgatePlayer = this.floodgateApi.getPlayer(this.proxyPlayer.getUniqueId());
+    if (floodgatePlayer == null) {
+      return false;
+    }
+
+    boolean hasDescription = !totpFormDescription.isEmpty();
+    boolean hasError = errorMessage != null && !errorMessage.isEmpty();
+    CustomForm.Builder builder = CustomForm.builder()
+        .title(totpFormTitle);
+
+    if (hasDescription) {
+      builder.label(totpFormDescription);
+    }
+    if (hasError) {
+      builder.label(errorMessage);
+    }
+
+    builder.input(totpFormCodePrompt, totpFormCodePlaceholder, "");
+
+    final boolean descriptionPresent = hasDescription;
+    final boolean errorPresent = hasError;
+    builder.responseHandler((form, response) -> this.handleTotpFormResponse(form, response, descriptionPresent, errorPresent));
+
+    return floodgatePlayer.sendForm(builder);
+  }
+
+  private void handleRegisterFormResponse(CustomForm form, String response, boolean hasDescription, boolean hasError) {
+    CustomFormResponse formResponse = form.parseResponse(response);
+    if (!formResponse.isCorrect()) {
+      this.sendMessage(false);
+      return;
+    }
+
+    int index = 0;
+    if (hasDescription) {
+      ++index;
+    }
+    if (hasError) {
+      ++index;
+    }
+
+    String password = formResponse.getInput(index);
+    if (password == null) {
+      password = "";
+    }
+
+    String repeatPassword = password;
+    if (Settings.IMP.MAIN.REGISTER_NEED_REPEAT_PASSWORD) {
+      String repeatInput = formResponse.getInput(index + 1);
+      repeatPassword = repeatInput != null ? repeatInput : "";
+    }
+
+    if (Settings.IMP.MAIN.REGISTER_NEED_REPEAT_PASSWORD && !password.equals(repeatPassword)) {
+      if (!this.openRegisterForm(registerFormErrorDifferentPasswords)) {
+        this.proxyPlayer.sendMessage(registerDifferentPasswords);
+      }
+      return;
+    }
+
+    int length = password.length();
+    if (length > Settings.IMP.MAIN.MAX_PASSWORD_LENGTH) {
+      if (!this.openRegisterForm(registerFormErrorPasswordTooLong)) {
+        this.proxyPlayer.sendMessage(registerPasswordTooLong);
+      }
+      return;
+    }
+    if (length < Settings.IMP.MAIN.MIN_PASSWORD_LENGTH) {
+      if (!this.openRegisterForm(registerFormErrorPasswordTooShort)) {
+        this.proxyPlayer.sendMessage(registerPasswordTooShort);
+      }
+      return;
+    }
+    if (Settings.IMP.MAIN.CHECK_PASSWORD_STRENGTH && this.plugin.getUnsafePasswords().contains(password)) {
+      if (!this.openRegisterForm(registerFormErrorPasswordUnsafe)) {
+        this.proxyPlayer.sendMessage(registerPasswordUnsafe);
+      }
+      return;
+    }
+
+    this.saveTempPassword(password);
+    RegisteredPlayer registeredPlayer = new RegisteredPlayer(this.proxyPlayer).setPassword(password);
+
+    try {
+      this.playerDao.create(registeredPlayer);
+      this.playerInfo = registeredPlayer;
+    } catch (SQLException e) {
+      this.proxyPlayer.disconnect(databaseErrorKick);
+      throw new SQLRuntimeException(e);
+    }
+
+    this.proxyPlayer.sendMessage(registerSuccessful);
+    if (registerSuccessfulTitle != null) {
+      this.proxyPlayer.showTitle(registerSuccessfulTitle);
+    }
+
+    this.plugin.getServer().getEventManager()
+        .fire(new PostRegisterEvent(this::finishAuth, this.player, this.playerInfo, this.tempPassword))
+        .thenAcceptAsync(this::finishAuth);
+  }
+
+  private void handleLoginFormResponse(CustomForm form, String response, boolean hasDescription, boolean hasError) {
+    if (this.playerInfo == null) {
+      return;
+    }
+
+    CustomFormResponse formResponse = form.parseResponse(response);
+    if (!formResponse.isCorrect()) {
+      this.sendMessage(false);
+      return;
+    }
+
+    int index = 0;
+    if (hasDescription) {
+      ++index;
+    }
+    if (hasError) {
+      ++index;
+    }
+
+    String password = formResponse.getInput(index);
+    if (password == null) {
+      password = "";
+    }
+
+    this.saveTempPassword(password);
+
+    if (password.length() > 0 && checkPassword(password, this.playerInfo, this.playerDao)) {
+      if (this.playerInfo.getTotpToken().isEmpty()) {
+        this.finishLogin();
+      } else {
+        this.totpState = true;
+        this.sendMessage(true);
+      }
+      return;
+    }
+
+    if (--this.attempts != 0) {
+      this.checkBruteforceAttempts();
+      String errorMessage = MessageFormat.format(loginFormErrorWrongPassword, this.attempts);
+      if (!this.openLoginForm(errorMessage)) {
+        this.proxyPlayer.sendMessage(loginWrongPassword[this.attempts - 1]);
+      }
+    } else {
+      this.proxyPlayer.disconnect(loginWrongPasswordKick);
+    }
+  }
+
+  private void handleTotpFormResponse(CustomForm form, String response, boolean hasDescription, boolean hasError) {
+    if (this.playerInfo == null) {
+      return;
+    }
+
+    CustomFormResponse formResponse = form.parseResponse(response);
+    if (!formResponse.isCorrect()) {
+      this.sendMessage(false);
+      return;
+    }
+
+    int index = 0;
+    if (hasDescription) {
+      ++index;
+    }
+    if (hasError) {
+      ++index;
+    }
+
+    String code = formResponse.getInput(index);
+    if (code == null) {
+      code = "";
+    }
+    code = code.trim();
+
+    if (TOTP_CODE_VERIFIER.isValidCode(this.playerInfo.getTotpToken(), code)) {
+      this.finishLogin();
+      return;
+    }
+
+    this.checkBruteforceAttempts();
+    if (!this.openTotpForm(totpFormErrorWrongCode)) {
+      this.proxyPlayer.sendMessage(totp);
     }
   }
 
@@ -522,6 +832,27 @@ public class AuthSessionHandler implements LimboSessionHandler {
           Settings.IMP.MAIN.CRACKED_TITLE_SETTINGS.toTimes()
       );
     }
+
+    registerFormTitle = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_TITLE;
+    registerFormDescription = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_DESCRIPTION;
+    registerFormPasswordPrompt = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_PASSWORD_PROMPT;
+    registerFormPasswordPlaceholder = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_PASSWORD_PLACEHOLDER;
+    registerFormPasswordConfirmPrompt = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_PASSWORD_CONFIRM_PROMPT;
+    registerFormPasswordConfirmPlaceholder = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_PASSWORD_CONFIRM_PLACEHOLDER;
+    registerFormErrorDifferentPasswords = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_ERROR_DIFFERENT_PASSWORDS;
+    registerFormErrorPasswordTooLong = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_ERROR_PASSWORD_TOO_LONG;
+    registerFormErrorPasswordTooShort = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_ERROR_PASSWORD_TOO_SHORT;
+    registerFormErrorPasswordUnsafe = Settings.IMP.MAIN.STRINGS.REGISTER_FORM_ERROR_PASSWORD_UNSAFE;
+    loginFormTitle = Settings.IMP.MAIN.STRINGS.LOGIN_FORM_TITLE;
+    loginFormDescription = Settings.IMP.MAIN.STRINGS.LOGIN_FORM_DESCRIPTION;
+    loginFormPasswordPrompt = Settings.IMP.MAIN.STRINGS.LOGIN_FORM_PASSWORD_PROMPT;
+    loginFormPasswordPlaceholder = Settings.IMP.MAIN.STRINGS.LOGIN_FORM_PASSWORD_PLACEHOLDER;
+    loginFormErrorWrongPassword = Settings.IMP.MAIN.STRINGS.LOGIN_FORM_ERROR_WRONG_PASSWORD;
+    totpFormTitle = Settings.IMP.MAIN.STRINGS.TOTP_FORM_TITLE;
+    totpFormDescription = Settings.IMP.MAIN.STRINGS.TOTP_FORM_DESCRIPTION;
+    totpFormCodePrompt = Settings.IMP.MAIN.STRINGS.TOTP_FORM_CODE_PROMPT;
+    totpFormCodePlaceholder = Settings.IMP.MAIN.STRINGS.TOTP_FORM_CODE_PLACEHOLDER;
+    totpFormErrorWrongCode = Settings.IMP.MAIN.STRINGS.TOTP_FORM_ERROR_WRONG_CODE;
 
     migrationHash = Settings.IMP.MAIN.MIGRATION_HASH;
   }

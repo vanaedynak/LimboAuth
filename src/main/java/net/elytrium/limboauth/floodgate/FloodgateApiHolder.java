@@ -18,7 +18,9 @@
 package net.elytrium.limboauth.floodgate;
 
 import java.util.UUID;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.floodgate.api.FloodgateApi;
+import org.geysermc.floodgate.api.player.FloodgatePlayer;
 
 /**
  * Holder class for optional floodgate feature, we can't inject of optional plugins without holders due to Velocity structure.
@@ -37,5 +39,10 @@ public class FloodgateApiHolder {
 
   public int getPrefixLength() {
     return this.floodgateApi.getPlayerPrefix().length();
+  }
+
+  @Nullable
+  public FloodgatePlayer getPlayer(UUID uuid) {
+    return this.floodgateApi.getPlayer(uuid);
   }
 }

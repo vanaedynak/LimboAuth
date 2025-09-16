@@ -432,6 +432,13 @@ public class Settings extends YamlConfig {
       @Comment(value = "Can be empty.", at = Comment.At.SAME_LINE)
       public String LOGIN_SUCCESSFUL_SUBTITLE = "&aSuccessfully logged in!";
 
+      @Comment("Bedrock login form")
+      public String LOGIN_FORM_TITLE = "Authorization";
+      public String LOGIN_FORM_DESCRIPTION = "Please, enter your password. Attempts left: {0}";
+      public String LOGIN_FORM_PASSWORD_PROMPT = "Password";
+      public String LOGIN_FORM_PASSWORD_PLACEHOLDER = "";
+      public String LOGIN_FORM_ERROR_WRONG_PASSWORD = "Wrong password. Attempts left: {0}";
+
       @Comment("Or if register-need-repeat-password set to false remove the \"<repeat password>\" part.")
       public String REGISTER = "{PRFX} Please, register using &6/register <password> <repeat password>";
       public String REGISTER_DIFFERENT_PASSWORDS = "{PRFX} &cThe entered passwords differ from each other!";
@@ -447,6 +454,18 @@ public class Settings extends YamlConfig {
       public String REGISTER_SUCCESSFUL_TITLE = "{PRFX}";
       @Comment(value = "Can be empty.", at = Comment.At.SAME_LINE)
       public String REGISTER_SUCCESSFUL_SUBTITLE = "&aSuccessfully registered!";
+
+      @Comment("Bedrock registration form")
+      public String REGISTER_FORM_TITLE = "Registration";
+      public String REGISTER_FORM_DESCRIPTION = "Please, enter your password to register.";
+      public String REGISTER_FORM_PASSWORD_PROMPT = "Password";
+      public String REGISTER_FORM_PASSWORD_PLACEHOLDER = "";
+      public String REGISTER_FORM_PASSWORD_CONFIRM_PROMPT = "Repeat password";
+      public String REGISTER_FORM_PASSWORD_CONFIRM_PLACEHOLDER = "";
+      public String REGISTER_FORM_ERROR_DIFFERENT_PASSWORDS = "The entered passwords differ from each other!";
+      public String REGISTER_FORM_ERROR_PASSWORD_TOO_SHORT = "You entered a too short password, use a different one!";
+      public String REGISTER_FORM_ERROR_PASSWORD_TOO_LONG = "You entered a too long password, use a different one!";
+      public String REGISTER_FORM_ERROR_PASSWORD_UNSAFE = "Your password is unsafe, use a different one!";
 
       public String UNREGISTER_SUCCESSFUL = "{PRFX}{NL}&aSuccessfully unregistered!";
       public String UNREGISTER_USAGE = "{PRFX} Usage: &6/unregister <current password> confirm";
@@ -495,6 +514,12 @@ public class Settings extends YamlConfig {
       @Comment("Or if totp-need-pass set to false remove the \"<current password>\" part.")
       public String TOTP_USAGE = "{PRFX} Usage: &6/2fa enable <current password>&f or &6/2fa disable <totp key>&f.";
       public String TOTP_WRONG = "{PRFX} &cWrong 2FA key!";
+      @Comment("Bedrock 2FA form")
+      public String TOTP_FORM_TITLE = "Two-Factor Authentication";
+      public String TOTP_FORM_DESCRIPTION = "Please, enter your 2FA key.";
+      public String TOTP_FORM_CODE_PROMPT = "2FA code";
+      public String TOTP_FORM_CODE_PLACEHOLDER = "";
+      public String TOTP_FORM_ERROR_WRONG_CODE = "Wrong 2FA key!";
       public String TOTP_ALREADY_ENABLED = "{PRFX} &c2FA is already enabled. Disable it using &6/2fa disable <key>&c.";
       public String TOTP_QR = "{PRFX} Click here to open 2FA QR code in browser.";
       public String TOTP_TOKEN = "{PRFX} &aYour 2FA token &7(Click to copy)&a: &6{0}";
