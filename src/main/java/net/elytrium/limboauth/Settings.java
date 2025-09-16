@@ -112,6 +112,47 @@ public class Settings extends YamlConfig {
     public boolean TOTP_NEED_PASSWORD = true;
     public boolean REGISTER_NEED_REPEAT_PASSWORD = true;
     public boolean CHANGE_PASSWORD_NEED_OLD_PASSWORD = true;
+
+    @Create
+    public MAIN.FLOODGATE_FORMS FLOODGATE_FORMS;
+
+    @Comment("Settings for Floodgate Bedrock authentication forms.")
+    public static class FLOODGATE_FORMS {
+
+      public boolean ENABLED = true;
+
+      @Comment("Title shown on the registration form for Floodgate players.")
+      public String REGISTER_TITLE = "LimboAuth Registration";
+      public String REGISTER_TEXT = "Create a password to protect your account.";
+      public String REGISTER_PASSWORD_LABEL = "Password";
+      public String REGISTER_PASSWORD_PLACEHOLDER = "Enter password";
+      public String REGISTER_REPEAT_LABEL = "Repeat password";
+      public String REGISTER_REPEAT_PLACEHOLDER = "Repeat password";
+      public String REGISTER_ERROR_PASSWORD_MISMATCH = "§cThe passwords do not match.";
+      public String REGISTER_ERROR_PASSWORD_TOO_SHORT = "§cThe password is too short.";
+      public String REGISTER_ERROR_PASSWORD_TOO_LONG = "§cThe password is too long.";
+      public String REGISTER_ERROR_PASSWORD_UNSAFE = "§cThe password is unsafe.";
+      public String REGISTER_ERROR_PASSWORD_EMPTY = "§cThe password cannot be empty.";
+
+      @Comment("Title shown on the login form for Floodgate players.")
+      public String LOGIN_TITLE = "LimboAuth Login";
+      public String LOGIN_TEXT = "Enter your password to continue.";
+      public String LOGIN_PASSWORD_LABEL = "Password";
+      public String LOGIN_PASSWORD_PLACEHOLDER = "Enter password";
+      public String LOGIN_ERROR_PASSWORD_EMPTY = "§cThe password cannot be empty.";
+      public String LOGIN_ERROR_WRONG_PASSWORD = "§cIncorrect password. Attempts left: {0}";
+
+      @Comment("Title shown on the 2FA form for Floodgate players.")
+      public String TOTP_TITLE = "Two-factor authentication";
+      public String TOTP_TEXT = "Enter the 2FA code from your authenticator app.";
+      public String TOTP_CODE_LABEL = "2FA code";
+      public String TOTP_PLACEHOLDER = "000000";
+      public String TOTP_ERROR_EMPTY = "§cThe 2FA code cannot be empty.";
+      public String TOTP_ERROR_INVALID = "§cThe 2FA code is invalid.";
+
+      public String FORM_CLOSED = "§cYou must finish the form to authenticate.";
+    }
+
     @Comment("Used in unregister and premium commands.")
     public String CONFIRM_KEYWORD = "confirm";
     @Comment("This prefix will be added to offline mode players nickname")
