@@ -57,12 +57,15 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.cumulus.CustomForm;
 import org.geysermc.cumulus.response.CustomFormResponse;
 import org.geysermc.floodgate.api.player.FloodgatePlayer;
+import org.slf4j.Logger;
 
 public class AuthSessionHandler implements LimboSessionHandler {
 
   public static final CodeVerifier TOTP_CODE_VERIFIER = new DefaultCodeVerifier(new DefaultCodeGenerator(), new SystemTimeProvider());
   private static final BCrypt.Verifyer HASH_VERIFIER = BCrypt.verifyer();
   private static final BCrypt.Hasher HASHER = BCrypt.withDefaults();
+  private static final long FLOODGATE_FORM_RETRY_DELAY = 500L;
+  private static final int FLOODGATE_FORM_MAX_ATTEMPTS = 5;
 
   private static Component ratelimited;
   private static BossBar.Color bossbarColor;
@@ -141,6 +144,9 @@ public class AuthSessionHandler implements LimboSessionHandler {
   private boolean totpState;
   private String tempPassword;
   private boolean tokenReceived;
+  private int floodgateFormRetryAttempts;
+  @Nullable
+  private ScheduledFuture<?> floodgateFormRetryTask;
 
   public AuthSessionHandler(Dao<RegisteredPlayer, String> playerDao, Player proxyPlayer, LimboAuth plugin,
       @Nullable RegisteredPlayer playerInfo, @Nullable FloodgateApiHolder floodgateApi) {
@@ -374,28 +380,20 @@ public class AuthSessionHandler implements LimboSessionHandler {
       this.authMainTask.cancel(true);
     }
 
+    this.clearFloodgateRetry();
     this.proxyPlayer.hideBossBar(this.bossBar);
     this.plugin.removeAuthenticatingPlayer(this.player.getProxyPlayer().getUsername());
   }
 
   private void sendMessage(boolean sendTitle) {
     if (this.isFloodgatePlayer()) {
-      boolean sent = false;
+      boolean sent;
       if (this.totpState) {
-        sent = this.openTotpForm(null);
-        if (sent && sendTitle && totpTitle != null) {
-          this.proxyPlayer.showTitle(totpTitle);
-        }
+        sent = this.openTotpForm(null, sendTitle);
       } else if (this.playerInfo == null) {
-        sent = this.openRegisterForm(null);
-        if (sent && sendTitle && registerTitle != null) {
-          this.proxyPlayer.showTitle(registerTitle);
-        }
+        sent = this.openRegisterForm(null, sendTitle);
       } else {
-        sent = this.openLoginForm(null);
-        if (sent && sendTitle && loginTitle != null) {
-          this.proxyPlayer.showTitle(loginTitle);
-        }
+        sent = this.openLoginForm(null, sendTitle);
       }
 
       if (sent) {
@@ -425,101 +423,245 @@ public class AuthSessionHandler implements LimboSessionHandler {
     return this.floodgateApi != null && this.floodgateApi.isFloodgatePlayer(this.proxyPlayer.getUniqueId());
   }
 
-  private boolean openRegisterForm(@Nullable String errorMessage) {
-    if (this.floodgateApi == null) {
-      return false;
-    }
-
-    FloodgatePlayer floodgatePlayer = this.floodgateApi.getPlayer(this.proxyPlayer.getUniqueId());
-    if (floodgatePlayer == null) {
-      return false;
-    }
-
-    boolean hasDescription = !registerFormDescription.isEmpty();
-    boolean hasError = errorMessage != null && !errorMessage.isEmpty();
-    CustomForm.Builder builder = CustomForm.builder()
-        .title(registerFormTitle);
-
-    if (hasDescription) {
-      builder.label(registerFormDescription);
-    }
-    if (hasError) {
-      builder.label(errorMessage);
-    }
-
-    builder.input(registerFormPasswordPrompt, registerFormPasswordPlaceholder, "");
-    if (Settings.IMP.MAIN.REGISTER_NEED_REPEAT_PASSWORD) {
-      builder.input(registerFormPasswordConfirmPrompt, registerFormPasswordConfirmPlaceholder, "");
-    }
-
-    final boolean descriptionPresent = hasDescription;
-    final boolean errorPresent = hasError;
-    builder.responseHandler((form, response) -> this.handleRegisterFormResponse(form, response, descriptionPresent, errorPresent));
-
-    return floodgatePlayer.sendForm(builder);
+  private boolean openRegisterForm(@Nullable String errorMessage, boolean sendTitle) {
+    return this.tryOpenFloodgateForm(FloodgateFormType.REGISTER, errorMessage, sendTitle, false);
   }
 
-  private boolean openLoginForm(@Nullable String errorMessage) {
-    if (this.floodgateApi == null) {
-      return false;
-    }
-
-    FloodgatePlayer floodgatePlayer = this.floodgateApi.getPlayer(this.proxyPlayer.getUniqueId());
-    if (floodgatePlayer == null) {
-      return false;
-    }
-
-    boolean hasDescription = !loginFormDescription.isEmpty();
-    boolean hasError = errorMessage != null && !errorMessage.isEmpty();
-    String title = MessageFormat.format(loginFormTitle, this.attempts);
-    CustomForm.Builder builder = CustomForm.builder()
-        .title(title);
-
-    if (hasDescription) {
-      builder.label(MessageFormat.format(loginFormDescription, this.attempts));
-    }
-    if (hasError) {
-      builder.label(errorMessage);
-    }
-
-    builder.input(loginFormPasswordPrompt, loginFormPasswordPlaceholder, "");
-
-    final boolean descriptionPresent = hasDescription;
-    final boolean errorPresent = hasError;
-    builder.responseHandler((form, response) -> this.handleLoginFormResponse(form, response, descriptionPresent, errorPresent));
-
-    return floodgatePlayer.sendForm(builder);
+  private boolean openLoginForm(@Nullable String errorMessage, boolean sendTitle) {
+    return this.tryOpenFloodgateForm(FloodgateFormType.LOGIN, errorMessage, sendTitle, false);
   }
 
-  private boolean openTotpForm(@Nullable String errorMessage) {
+  private boolean openTotpForm(@Nullable String errorMessage, boolean sendTitle) {
+    return this.tryOpenFloodgateForm(FloodgateFormType.TOTP, errorMessage, sendTitle, false);
+  }
+
+  private boolean tryOpenFloodgateForm(FloodgateFormType type, @Nullable String errorMessage, boolean sendTitle, boolean fromRetry) {
+    if (!this.isFloodgatePlayer()) {
+      return false;
+    }
+
+    boolean hasError = errorMessage != null && !errorMessage.isEmpty();
+    CustomForm.Builder builder;
+
+    switch (type) {
+      case REGISTER: {
+        boolean hasDescription = !registerFormDescription.isEmpty();
+        builder = CustomForm.builder()
+            .title(registerFormTitle);
+
+        if (hasDescription) {
+          builder.label(registerFormDescription);
+        }
+        if (hasError) {
+          builder.label(errorMessage);
+        }
+
+        builder.input(registerFormPasswordPrompt, registerFormPasswordPlaceholder, "");
+        if (Settings.IMP.MAIN.REGISTER_NEED_REPEAT_PASSWORD) {
+          builder.input(registerFormPasswordConfirmPrompt, registerFormPasswordConfirmPlaceholder, "");
+        }
+
+        final boolean descriptionPresent = hasDescription;
+        final boolean errorPresent = hasError;
+        builder.responseHandler((form, response) -> this.handleRegisterFormResponse(form, response, descriptionPresent, errorPresent));
+        break;
+      }
+      case LOGIN: {
+        boolean hasDescription = !loginFormDescription.isEmpty();
+        String title = MessageFormat.format(loginFormTitle, this.attempts);
+        builder = CustomForm.builder()
+            .title(title);
+
+        if (hasDescription) {
+          builder.label(MessageFormat.format(loginFormDescription, this.attempts));
+        }
+        if (hasError) {
+          builder.label(errorMessage);
+        }
+
+        builder.input(loginFormPasswordPrompt, loginFormPasswordPlaceholder, "");
+
+        final boolean descriptionPresent = hasDescription;
+        final boolean errorPresent = hasError;
+        builder.responseHandler((form, response) -> this.handleLoginFormResponse(form, response, descriptionPresent, errorPresent));
+        break;
+      }
+      case TOTP: {
+        boolean hasDescription = !totpFormDescription.isEmpty();
+        builder = CustomForm.builder()
+            .title(totpFormTitle);
+
+        if (hasDescription) {
+          builder.label(totpFormDescription);
+        }
+        if (hasError) {
+          builder.label(errorMessage);
+        }
+
+        builder.input(totpFormCodePrompt, totpFormCodePlaceholder, "");
+
+        final boolean descriptionPresent = hasDescription;
+        final boolean errorPresent = hasError;
+        builder.responseHandler((form, response) -> this.handleTotpFormResponse(form, response, descriptionPresent, errorPresent));
+        break;
+      }
+      default:
+        return false;
+    }
+
+    return this.sendFloodgateForm(builder, type, errorMessage, sendTitle, fromRetry);
+  }
+
+  private boolean sendFloodgateForm(
+      CustomForm.Builder builder,
+      FloodgateFormType type,
+      @Nullable String errorMessage,
+      boolean sendTitle,
+      boolean fromRetry
+  ) {
     if (this.floodgateApi == null) {
       return false;
     }
 
     FloodgatePlayer floodgatePlayer = this.floodgateApi.getPlayer(this.proxyPlayer.getUniqueId());
     if (floodgatePlayer == null) {
+      this.logFloodgateWarn(
+          "Unable to open Floodgate {} form for {}: player not available (error: {}, attempt: {}, fromRetry: {})",
+          type.getDisplayName(),
+          this.proxyPlayer.getUsername(),
+          errorMessage != null ? errorMessage : "none",
+          this.floodgateFormRetryAttempts,
+          fromRetry
+      );
+      if (!fromRetry) {
+        this.scheduleFloodgateFormRetry(type, errorMessage, sendTitle);
+      }
       return false;
     }
 
-    boolean hasDescription = !totpFormDescription.isEmpty();
-    boolean hasError = errorMessage != null && !errorMessage.isEmpty();
-    CustomForm.Builder builder = CustomForm.builder()
-        .title(totpFormTitle);
-
-    if (hasDescription) {
-      builder.label(totpFormDescription);
+    boolean sent = floodgatePlayer.sendForm(builder);
+    if (sent) {
+      int attempts = this.floodgateFormRetryAttempts;
+      if (attempts > 0) {
+        this.logFloodgateInfo(
+            "Sent Floodgate {} form to {} after {} retries",
+            type.getDisplayName(),
+            this.proxyPlayer.getUsername(),
+            attempts
+        );
+      } else {
+        this.logFloodgateInfo(
+            "Sent Floodgate {} form to {}",
+            type.getDisplayName(),
+            this.proxyPlayer.getUsername()
+        );
+      }
+      if (sendTitle) {
+        this.showFloodgateTitle(type);
+      }
+      this.clearFloodgateRetry();
+    } else {
+      this.logFloodgateWarn(
+          "Floodgate API rejected {} form for {} (error: {}, attempt: {}, fromRetry: {})",
+          type.getDisplayName(),
+          this.proxyPlayer.getUsername(),
+          errorMessage != null ? errorMessage : "none",
+          this.floodgateFormRetryAttempts,
+          fromRetry
+      );
+      if (!fromRetry) {
+        this.scheduleFloodgateFormRetry(type, errorMessage, sendTitle);
+      }
     }
-    if (hasError) {
-      builder.label(errorMessage);
+
+    return sent;
+  }
+
+  private void showFloodgateTitle(FloodgateFormType type) {
+    switch (type) {
+      case REGISTER:
+        if (registerTitle != null) {
+          this.proxyPlayer.showTitle(registerTitle);
+        }
+        break;
+      case LOGIN:
+        if (loginTitle != null) {
+          this.proxyPlayer.showTitle(loginTitle);
+        }
+        break;
+      case TOTP:
+        if (totpTitle != null) {
+          this.proxyPlayer.showTitle(totpTitle);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  private void scheduleFloodgateFormRetry(FloodgateFormType type, @Nullable String errorMessage, boolean sendTitle) {
+    if (this.player == null) {
+      return;
+    }
+    if (this.floodgateFormRetryTask != null && !this.floodgateFormRetryTask.isDone()) {
+      return;
     }
 
-    builder.input(totpFormCodePrompt, totpFormCodePlaceholder, "");
+    int nextAttempt = this.floodgateFormRetryAttempts + 1;
+    if (nextAttempt > FLOODGATE_FORM_MAX_ATTEMPTS) {
+      this.logFloodgateWarn(
+          "Giving up on Floodgate {} form for {} after {} attempts",
+          type.getDisplayName(),
+          this.proxyPlayer.getUsername(),
+          this.floodgateFormRetryAttempts
+      );
+      this.clearFloodgateRetry();
+      return;
+    }
 
-    final boolean descriptionPresent = hasDescription;
-    final boolean errorPresent = hasError;
-    builder.responseHandler((form, response) -> this.handleTotpFormResponse(form, response, descriptionPresent, errorPresent));
+    this.logFloodgateInfo(
+        "Scheduling Floodgate {} form retry for {} (attempt {}/{})",
+        type.getDisplayName(),
+        this.proxyPlayer.getUsername(),
+        nextAttempt,
+        FLOODGATE_FORM_MAX_ATTEMPTS
+    );
 
-    return floodgatePlayer.sendForm(builder);
+    this.floodgateFormRetryTask = this.player.getScheduledExecutor().schedule(() -> {
+      this.floodgateFormRetryTask = null;
+      if (!this.isFloodgatePlayer()) {
+        this.clearFloodgateRetry();
+        return;
+      }
+
+      this.floodgateFormRetryAttempts = nextAttempt;
+      boolean sent = this.tryOpenFloodgateForm(type, errorMessage, sendTitle, true);
+      if (!sent) {
+        this.scheduleFloodgateFormRetry(type, errorMessage, sendTitle);
+      }
+    }, FLOODGATE_FORM_RETRY_DELAY, TimeUnit.MILLISECONDS);
+  }
+
+  private void clearFloodgateRetry() {
+    this.floodgateFormRetryAttempts = 0;
+    if (this.floodgateFormRetryTask != null) {
+      this.floodgateFormRetryTask.cancel(false);
+      this.floodgateFormRetryTask = null;
+    }
+  }
+
+  private void logFloodgateInfo(String message, Object... arguments) {
+    Logger logger = LimboAuth.getLogger();
+    if (logger != null) {
+      logger.info(message, arguments);
+    }
+  }
+
+  private void logFloodgateWarn(String message, Object... arguments) {
+    Logger logger = LimboAuth.getLogger();
+    if (logger != null) {
+      logger.warn(message, arguments);
+    }
   }
 
   private void handleRegisterFormResponse(CustomForm form, String response, boolean hasDescription, boolean hasError) {
@@ -549,7 +691,7 @@ public class AuthSessionHandler implements LimboSessionHandler {
     }
 
     if (Settings.IMP.MAIN.REGISTER_NEED_REPEAT_PASSWORD && !password.equals(repeatPassword)) {
-      if (!this.openRegisterForm(registerFormErrorDifferentPasswords)) {
+      if (!this.openRegisterForm(registerFormErrorDifferentPasswords, false)) {
         this.proxyPlayer.sendMessage(registerDifferentPasswords);
       }
       return;
@@ -557,19 +699,19 @@ public class AuthSessionHandler implements LimboSessionHandler {
 
     int length = password.length();
     if (length > Settings.IMP.MAIN.MAX_PASSWORD_LENGTH) {
-      if (!this.openRegisterForm(registerFormErrorPasswordTooLong)) {
+      if (!this.openRegisterForm(registerFormErrorPasswordTooLong, false)) {
         this.proxyPlayer.sendMessage(registerPasswordTooLong);
       }
       return;
     }
     if (length < Settings.IMP.MAIN.MIN_PASSWORD_LENGTH) {
-      if (!this.openRegisterForm(registerFormErrorPasswordTooShort)) {
+      if (!this.openRegisterForm(registerFormErrorPasswordTooShort, false)) {
         this.proxyPlayer.sendMessage(registerPasswordTooShort);
       }
       return;
     }
     if (Settings.IMP.MAIN.CHECK_PASSWORD_STRENGTH && this.plugin.getUnsafePasswords().contains(password)) {
-      if (!this.openRegisterForm(registerFormErrorPasswordUnsafe)) {
+      if (!this.openRegisterForm(registerFormErrorPasswordUnsafe, false)) {
         this.proxyPlayer.sendMessage(registerPasswordUnsafe);
       }
       return;
@@ -635,7 +777,7 @@ public class AuthSessionHandler implements LimboSessionHandler {
     if (--this.attempts != 0) {
       this.checkBruteforceAttempts();
       String errorMessage = MessageFormat.format(loginFormErrorWrongPassword, this.attempts);
-      if (!this.openLoginForm(errorMessage)) {
+      if (!this.openLoginForm(errorMessage, false)) {
         this.proxyPlayer.sendMessage(loginWrongPassword[this.attempts - 1]);
       }
     } else {
@@ -674,7 +816,7 @@ public class AuthSessionHandler implements LimboSessionHandler {
     }
 
     this.checkBruteforceAttempts();
-    if (!this.openTotpForm(totpFormErrorWrongCode)) {
+    if (!this.openTotpForm(totpFormErrorWrongCode, false)) {
       this.proxyPlayer.sendMessage(totp);
     }
   }
@@ -756,6 +898,7 @@ public class AuthSessionHandler implements LimboSessionHandler {
     }
 
     this.plugin.cacheAuthUser(this.proxyPlayer);
+    this.clearFloodgateRetry();
     this.player.disconnect();
   }
 
@@ -909,6 +1052,23 @@ public class AuthSessionHandler implements LimboSessionHandler {
     return HASHER.hashToString(Settings.IMP.MAIN.BCRYPT_COST, password.toCharArray());
   }
 
+
+  private enum FloodgateFormType {
+
+    REGISTER("registration"),
+    LOGIN("login"),
+    TOTP("totp");
+
+    private final String displayName;
+
+    FloodgateFormType(String displayName) {
+      this.displayName = displayName;
+    }
+
+    public String getDisplayName() {
+      return this.displayName;
+    }
+  }
 
   private enum Command {
 

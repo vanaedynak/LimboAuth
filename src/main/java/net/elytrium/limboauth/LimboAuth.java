@@ -959,6 +959,10 @@ public class LimboAuth {
     return this.playerDao;
   }
 
+  public static Logger getLogger() {
+    return LOGGER;
+  }
+
   private static void setLogger(Logger logger) {
     LOGGER = logger;
   }
