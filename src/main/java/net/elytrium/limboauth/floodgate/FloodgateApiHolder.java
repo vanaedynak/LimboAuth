@@ -18,13 +18,17 @@
 package net.elytrium.limboauth.floodgate;
 
 import java.util.UUID;
+import org.checkerframework.checker.nullness.qual.Nullable;
+import org.geysermc.cumulus.form.util.FormBuilder;
 import org.geysermc.floodgate.api.FloodgateApi;
+import org.geysermc.floodgate.api.player.FloodgatePlayer;
 
 /**
  * Holder class for optional floodgate feature, we can't inject of optional plugins without holders due to Velocity structure.
  */
 public class FloodgateApiHolder {
 
+  @Nullable
   private final FloodgateApi floodgateApi;
 
   public FloodgateApiHolder() {
@@ -32,10 +36,28 @@ public class FloodgateApiHolder {
   }
 
   public boolean isFloodgatePlayer(UUID uuid) {
-    return this.floodgateApi.isFloodgatePlayer(uuid);
+    return this.floodgateApi != null && this.floodgateApi.isFloodgatePlayer(uuid);
   }
 
   public int getPrefixLength() {
-    return this.floodgateApi.getPlayerPrefix().length();
+    return this.floodgateApi != null ? this.floodgateApi.getPlayerPrefix().length() : 0;
+  }
+
+  public boolean sendForm(UUID uuid, FormBuilder<?, ?, ?> builder) {
+    if (this.floodgateApi == null) {
+      return false;
+    }
+
+    FloodgatePlayer player = this.floodgateApi.getPlayer(uuid);
+    if (player == null) {
+      return false;
+    }
+
+    return player.sendForm(builder);
+  }
+
+  @Nullable
+  public FloodgatePlayer getPlayer(UUID uuid) {
+    return this.floodgateApi != null ? this.floodgateApi.getPlayer(uuid) : null;
   }
 }
